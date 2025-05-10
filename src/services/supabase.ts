@@ -8,10 +8,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 // Get the current domain, fallback to localhost for development
-const domain = window.location.hostname === 'localhost' 
+const domain = window.location.hostname === 'http://adhikari.app'
   ? 'http://localhost:5173'
   : 'https://adhikarishop.netlify.app/';
-
+ 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     flowType: 'pkce',

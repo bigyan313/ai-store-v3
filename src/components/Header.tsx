@@ -53,9 +53,9 @@ const Header: React.FC<HeaderProps> = ({ showAuthModal, onCloseAuthModal }) => {
       <div className="container mx-auto px-4 md:px-6">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center space-x-1">
-            <span className="text-4xl font-medium tracking-tight text-blue-600">A</span>
-            <span className="text-[9px] font-light tracking-[0.2em] text-blue-400">DHIKAR</span>
-            <span className="text-4xl font-medium tracking-tight text-blue-600">I</span>
+            <span className="text-4xl font-medium tracking-tight text-black-600">A</span>
+            <span className="text-[9px] font-light tracking-[0.2em] text-black-400">DHIKAR</span>
+            <span className="text-4xl font-medium tracking-tight text-black-600">I</span>
           </div>
 
           <nav className="hidden md:flex items-center space-x-8">

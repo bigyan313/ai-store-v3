@@ -1,6 +1,6 @@
 /*
  * Enhanced OpenAI service for extracting context and generating highly accurate outfit suggestions.
- * Keeps legacy export signatures intact while adding broader input support and stronger JSON guarantees.
+ * Keeps legacy export signatures intact while adding broader input support (activity, free‑text items) and stronger JSON guarantees.
  */
 
 import OpenAI from 'openai';
@@ -23,10 +23,11 @@ export interface ExtractedInfo {
     | 'anime'
     | 'sports'
     | 'culture'
-    | 'activity'; // e.g. hiking, gym, mountain trek
+    | 'activity' // e.g. hiking, gym, mountain trek
+    | 'item'; // arbitrary garment or style like "floral dress"
   // optional granular details
   destination?: string;
-  date?: string; // ISO formatted if supplied or inferred (yyyy‑MM‑dd)
+  date?: string; // ISO formatted if supplied or inferred (yyyy-MM-dd)
   event?: string;
   lyrics?: string;
   movie?: string;
@@ -34,6 +35,7 @@ export interface ExtractedInfo {
   sports?: string;
   culture?: string;
   activity?: string;
+  item?: string;
   location?: string; // extracted city/region if any
   raw?: string; // original user message for downstream reference
 }
@@ -42,14 +44,14 @@ export interface ExtractedInfo {
  * Choose the best available model. 4‑o‑mini is preferred for speed/cost, falling back to 3.5 if unavailable.
  */
 function selectModel(): string {
-  const preferred = 'gpt-4o-mini';
-  const fallback = 'gpt-3.5-turbo';
-  try {
-    // @ts-ignore – at runtime the SDK will throw if model unknown; we just return string here
-    return preferred;
-  } catch {
-    return fallback;
-  }
+  return 'gpt-4o-mini'; // SDK will raise at runtime if unavailable; front‑end can log/override
+}
+
+/**
+ * Strip polite prefixes (e.g. "I want", "I want to") so the language model focuses on core intent.
+ */
+function stripLeadingIntent(text: string): string {
+  return text.replace(/^\s*i\s*want(?:\s*to)?\s*/i, '').trim();
 }
 
 /**
@@ -58,12 +60,14 @@ function selectModel(): string {
 export async function extractTravelInfo(message: string): Promise<ExtractedInfo> {
   if (!message.trim()) throw new Error('Please provide a valid input');
 
+  const cleanedMessage = stripLeadingIntent(message);
+
   const systemPrompt = `You are an AI fashion assistant. Identify the *primary* fashion‑relevant context from the user message and reply **only** with a minified JSON object following this exact schema:
   {
-    "type": "travel | event | lyrics | movie | anime | sports | culture | activity",
+    "type": "travel | event | lyrics | movie | anime | sports | culture | activity | item",
     // include exactly ONE matching field below based on type
     "destination"?: string,
-    "date"?: string,      // if a date is present or implied (ISO 8601 yyyy-MM-dd)
+    "date"?: string,      // ISO 8601 yyyy-MM-dd if a date is present or implied
     "event"?: string,
     "lyrics"?: string,
     "movie"?: string,
@@ -71,17 +75,19 @@ export async function extractTravelInfo(message: string): Promise<ExtractedInfo>
     "sports"?: string,
     "culture"?: string,
     "activity"?: string,
+    "item"?: string,      // e.g. "floral dress", "white blazer"
     "location"?: string   // city/region if detected separate from destination
   }
+  • The JSON object MUST be valid and not wrapped in Markdown.
   • Always pick the *single* most relevant type.
-  • Do not wrap the JSON in markdown or extra text.
-  • If nothing fits, respond with {"type":"event","event":"general"}`;
+  • If the message is just a garment/style description (e.g. "floral dress"), set {"type":"item","item":"floral dress"}.
+  • If nothing fits, respond with {"type":"item","item":"general"}`;
 
   const completion = await openai.chat.completions.create({
     model: selectModel(),
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: message },
+      { role: 'user', content: cleanedMessage },
     ],
   });
 
@@ -97,18 +103,10 @@ export async function extractTravelInfo(message: string): Promise<ExtractedInfo>
   }
 }
 
-/**
- * Determine season from a given date.
- */
+/** Utility helpers **/
 function getSeason(date: Date): string {
   const m = date.getMonth();
-  return m < 2 || m === 11
-    ? 'Winter'
-    : m < 5
-    ? 'Spring'
-    : m < 8
-    ? 'Summer'
-    : 'Fall';
+  return m < 2 || m === 11 ? 'Winter' : m < 5 ? 'Spring' : m < 8 ? 'Summer' : 'Fall';
 }
 
 function getTemperatureCategory(tempF: number): string {
@@ -126,7 +124,7 @@ interface SuggestionParams {
   weather?: {
     date: Date | string;
     temperature: number; // °F
-    description: string; // eg. "Clear", "Rain"
+    description: string; // e.g. "Clear", "Rain"
     location: string;
   };
   event?: string;
@@ -136,15 +134,15 @@ interface SuggestionParams {
   sports?: string;
   culture?: string;
   activity?: string;
+  item?: string;
 }
 
 /**
  * Generate four rich outfit suggestions.
  */
 export async function generateOutfitSuggestions(params: SuggestionParams): Promise<any[]> {
-  const { weather, event, lyrics, movie, anime, sports, culture, activity } = params;
+  const { weather, event, lyrics, movie, anime, sports, culture, activity, item } = params;
 
-  // Build dynamic context prompt
   let contextInput = '';
   if (weather) {
     const temp = Math.round(weather.temperature);
@@ -153,7 +151,7 @@ export async function generateOutfitSuggestions(params: SuggestionParams): Promi
   } else if (activity) {
     contextInput = `Design 4 functional yet stylish outfits suitable for ${activity}. Focus on performance fabrics, comfort, and aesthetic appeal.`;
   } else if (event) {
-    contextInput = `Design 4 trend‑aware outfits suitable for attending a ${event}.`;
+    contextInput = `Design 4 on‑trend outfits suitable for a ${event}.`;
   } else if (lyrics) {
     contextInput = `Design 4 outfits inspired by the emotion, tone, and imagery of the lyrics: \"${lyrics}\".`;
   } else if (movie) {
@@ -164,6 +162,8 @@ export async function generateOutfitSuggestions(params: SuggestionParams): Promi
     contextInput = `Design 4 modern fan‑inspired outfits for the occasion: \"${sports}\".`;
   } else if (culture) {
     contextInput = `Design 4 fashion outfits based on the cultural vibe of \"${culture}\".`;
+  } else if (item) {
+    contextInput = `Show 4 creative ways to style a ${item} using current fashion trends.`;
   } else {
     contextInput = 'Design 4 versatile and stylish outfits based on cutting‑edge fashion trends.';
   }
@@ -174,18 +174,15 @@ Return ONLY a valid JSON array of FOUR objects; each object must match this sche
 {
   "type": string,               // creative outfit title
   "description": string,        // Top: ..., Bottom: ..., Shoes: ..., Accessories: ... (one line per item)
-  "searchQuery": string,        // a short query we can pass to CSE for key item
-  "imagePrompt": string         // vivid DALLE/Unsplash‑style prompt describing scene & outfit
+  "searchQuery": string,        // a short query for CSE
+  "imagePrompt": string         // vivid DALLE/Unsplash prompt describing scene & outfit
 }`;
 
   try {
     const completion = await openai.chat.completions.create({
       model: selectModel(),
       messages: [
-        {
-          role: 'system',
-          content: 'You are a cutting‑edge AI stylist specialised in merging practicality with high fashion. Respond only with raw JSON as specified.',
-        },
+        { role: 'system', content: 'You are a cutting‑edge AI stylist specialised in merging practicality with high fashion. Respond only with raw JSON as specified.' },
         { role: 'user', content: generationPrompt },
       ],
       temperature: 0.9,
@@ -194,12 +191,12 @@ Return ONLY a valid JSON array of FOUR objects; each object must match this sche
     const content = completion.choices?.[0]?.message?.content?.trim();
     if (!content) return [];
 
-    // Attempt strict JSON parsing – strip any leading code fences or text.
     const firstBracket = content.indexOf('[');
     const lastBracket = content.lastIndexOf(']');
-    if (firstBracket === -1 || lastBracket === -1) throw new Error('No JSON array found');
-    const rawJson = content.slice(firstBracket, lastBracket + 1);
-    return JSON.parse(rawJson);
+    if (firstBracket === -1 || lastBracket === -1)
+      throw new Error('No JSON array found');
+
+    return JSON.parse(content.slice(firstBracket, lastBracket + 1));
   } catch (err) {
     console.error('Error generating outfit suggestions:', err);
     return [];

@@ -1,107 +1,151 @@
-import OpenAI, { ClientOptions } from 'openai';
-import { format, parseISO, isValid } from 'date-fns';
-
-// ---------------------------------------------------------------------------
-//  OpenAI client setup
-// ---------------------------------------------------------------------------
-
-const MODEL = import.meta.env.VITE_OPENAI_MODEL || 'gpt-4o-mini';
+import OpenAI from 'openai';
+import { format } from 'date-fns';
 
 const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY,
-  dangerouslyAllowBrowser: true,
-} as ClientOptions);
+  dangerouslyAllowBrowser: true
+});
 
-// ---------------------------------------------------------------------------
-//  Type definitions
-// ---------------------------------------------------------------------------
-
-export interface OutfitContext {
-  /** One of the primary inspiration buckets */
-  inspirationType:
-    | 'travel'
-    | 'event'
-    | 'lyrics'
-    | 'movie'
-    | 'anime'
-    | 'sports'
-    | 'culture'
-    | 'weather';
-  /** “Paris, France” | “Tokyo” etc. */
-  location?: string;
-  /** ISO‑8601 date if mentioned or implied */
+interface ExtractedInfo {
+  type: 'travel' | 'event' | 'lyrics' | 'movie' | 'anime' | 'sports' | 'culture';
+  destination?: string;
   date?: string;
-  /** Specific event, e.g. “wedding” */
   event?: string;
-  /** Holiday or celebration, e.g. “Halloween” */
-  celebration?: string;
-  /** Style modifiers: “rave”, “business casual”, … */
-  theme?: string;
-  /** Weather words from prompt: “rainy”, “sunny”, … */
-  weatherDescription?: string;
-  /** Numeric temp (°F) if stated */
-  temperature?: number;
-  /** Title of referenced work or sports team */
-  referencedWork?: string;
-  /** Original user query */
-  originalQuery: string;
+  lyrics?: string;
+  movie?: string;
+  anime?: string;
+  sports?: string;
+  culture?: string;
 }
 
-export interface OutfitDesign {
-  /** Catchy outfit name */
-  type: string;
-  /** Labeled item breakdown */
-  description: string;
-  /** Hero item query for shopping */
-  searchQuery: string;
-  /** Prompt for image generation */
-  imagePrompt: string;
-}
+export async function extractTravelInfo(message: string): Promise<ExtractedInfo> {
+  const systemPrompt = `You are a fashion AI assistant. Extract one of the following: travel information, event type, song lyrics, movie/anime inspiration, sports fan theme, or cultural occasion from the user's message and return it in JSON format.
 
-// ---------------------------------------------------------------------------
-//  1️⃣  Parse user prompt into structured context
-// ---------------------------------------------------------------------------
+[...same as before...]
+}`;
 
-export async function parseOutfitPrompt(message: string): Promise<OutfitContext> {
-  if (!message.trim()) throw new Error('Please provide a valid input');
-
-  const schema = `Return JSON with the following keys (omit keys not present):
-
-- inspirationType: one of [\"travel\",\"event\",\"lyrics\",\"movie\",\"anime\",\"sports\",\"culture\",\"weather\"]
-- location: city / state / country
-- date: ISO-8601 (yyyy-mm-dd)
-- event: if inspirationType=event
-- celebration: holiday / celebration (e.g. Halloween)
-- theme: style or vibe keywords (e.g. rave, formal)
-- weatherDescription: user-mentioned weather words (rainy, sunny …)
-- temperature: number in °F
-- referencedWork: title of song / movie / anime or sports team
-- originalQuery: copy of the user message
-
-Only output JSON.`;
+  if (!message.trim()) {
+    throw new Error('Please provide a valid input');
+  }
 
   try {
     const completion = await openai.chat.completions.create({
-      model: MODEL,
-      response_format: { type: 'json_object' },
+      model: 'gpt-3.5-turbo',
       messages: [
-        { role: 'system', content: schema },
-        { role: 'user', content: message },
-      ],
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message }
+      ]
     });
 
-    const raw = completion.choices[0].message?.content;
-    if (!raw) throw new Error('Empty response from OpenAI');
+    const content = completion.choices[0].message.content;
+    if (!content) {
+      throw new Error('Please provide more details');
+    }
 
-    const parsed: OutfitContext = JSON.parse(raw);
-    parsed.originalQuery = message;
-    return parsed;
-  } catch (err: any) {
-    console.error('parseOutfitPrompt error:', err);
-    throw new Error(err.message || 'Unable to understand your request');
+    let result: ExtractedInfo;
+    try {
+      result = JSON.parse(content);
+    } catch (parseError) {
+      console.error('Failed to parse OpenAI response:', content);
+      throw new Error('Could not understand your request. Please try being more specific');
+    }
+
+    return result;
+  } catch (error: any) {
+    console.error('Error in extractTravelInfo:', error);
+    throw new Error(error.message || 'Failed to process your request');
   }
 }
 
-// Back‑compat shim so existing code using extractTravelInfo keeps working.
-// It simply proxies to the new function.
-export const extractTravelInfo = parseOutfitPrompt;
+export async function generateOutfitSuggestions(params: { weather?: any; event?: string; lyrics?: string; movie?: string; anime?: string; sports?: string; culture?: string }): Promise<any[]> {
+  const { weather, event, lyrics, movie, anime, sports, culture } = params;
+  let contextInput = '';
+
+  if (weather) {
+    const temp = Math.round(weather.temperature);
+    const season = getSeason(new Date(weather.date));
+    contextInput = `Design 4 fashion-forward outfits for ${weather.location}. Temperature: ${temp}°F (${getTemperatureCategory(temp)}), Condition: ${weather.description}, Season: ${season}.`;
+  } else if (event) {
+    contextInput = `Design 4 trend-aware outfits suitable for attending a ${event}.`;
+  } else if (lyrics) {
+    contextInput = `Design 4 outfits inspired by the emotion, tone, and imagery of the lyrics: \"${lyrics}\".`;
+  } else if (movie) {
+    contextInput = `Design 4 fashion looks inspired by the visual mood and style of the movie: \"${movie}\".`;
+  } else if (anime) {
+    contextInput = `Design 4 stylish outfits that channel the characters or aesthetic from the anime: \"${anime}\".`;
+  } else if (sports) {
+    contextInput = `Design 4 modern fan-inspired outfits for the occasion: \"${sports}\".`;
+  } else if (culture) {
+    contextInput = `Design 4 fashion outfits based on the cultural vibe of: \"${culture}\".`;
+  } else {
+    contextInput = `Design 4 versatile and stylish outfits based on recent fashion trends.`;
+  }
+
+  const prompt = `${contextInput}
+
+Each outfit should include:
+- A creative and fashionable name
+- Clear description with labeled clothing items (Top, Bottom, Outerwear if needed, Shoes, Accessories)
+- Include fabric, fit, and color details
+- Add a searchQuery string and imagePrompt string
+
+Format output as a valid JSON array of 4 objects. Each object must have:
+{
+  \"type\": \"Outfit Name\",
+  \"description\": \"Top: ..., Bottom: ..., Shoes: ..., Accessories: ...\",
+  \"searchQuery\": \"main item name\",
+  \"imagePrompt\": \"descriptive image idea\"
+}`;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a fashion-forward AI stylist trained on modern, edgy, and seasonal fashion trends. Respond with only a valid JSON array of 4 outfit objects.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ]
+    });
+
+    const content = completion.choices[0].message.content;
+    if (!content) return [];
+
+    try {
+      const jsonStart = content.indexOf('[');
+      const jsonEnd = content.lastIndexOf(']') + 1;
+      if (jsonStart < 0 || jsonEnd < 0) throw new Error('No JSON array found');
+      const cleanedContent = content.substring(jsonStart, jsonEnd).replace(/,(\s*[}\]])/g, '$1');
+      const outfits = JSON.parse(cleanedContent);
+      return Array.isArray(outfits) ? outfits : [];
+    } catch (error) {
+      console.error('Parsing error:', error);
+      return [];
+    }
+  } catch (error: any) {
+    console.error('Error generating outfit suggestions:', error);
+    return [];
+  }
+}
+
+function getSeason(date: Date): string {
+  const month = date.getMonth() + 1;
+  if (month >= 3 && month <= 5) return 'Spring';
+  if (month >= 6 && month <= 8) return 'Summer';
+  if (month >= 9 && month <= 11) return 'Fall';
+  return 'Winter';
+}
+
+function getTemperatureCategory(temp: number): string {
+  if (temp >= 85) return 'Very Hot';
+  if (temp >= 75) return 'Hot';
+  if (temp >= 65) return 'Warm';
+  if (temp >= 55) return 'Mild';
+  if (temp >= 45) return 'Cool';
+  if (temp >= 35) return 'Cold';
+  return 'Very Cold';
+}

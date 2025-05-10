@@ -92,7 +92,7 @@ const suggestionSystemPrompt =
 // extractOutfitContext ---------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-export async function extractOutfitContext(message: string): Promise<OutfitContext> {
+async function extractTravelInfo(message: string): Promise<OutfitContext> {
   if (!message.trim()) throw new Error('Please provide a non‑empty prompt.');
 
   const { choices } = await openai.chat.completions.create({
@@ -113,8 +113,8 @@ export async function extractOutfitContext(message: string): Promise<OutfitConte
   }
 }
 
-// Maintain legacy export so existing codebases keep working
-export { extractOutfitContext as extractTravelInfo };
+// // Maintain legacy export so existing codebases keep working
+ export { extractTravelInfo };
 
 // -----------------------------------------------------------------------------
 // generateOutfitSuggestions ----------------------------------------------------

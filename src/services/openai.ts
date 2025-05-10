@@ -1,136 +1,174 @@
-import OpenAI from 'openai';
-import { format } from 'date-fns';
+import OpenAI, { ClientOptions } from 'openai';
+import { format, parseISO, isValid } from 'date-fns';
+
+// ---------------------------------------------------------------------------
+//  OpenAI client setup
+// ---------------------------------------------------------------------------
+
+const MODEL = import.meta.env.VITE_OPENAI_MODEL || 'gpt-4o-mini';
 
 const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY,
-  dangerouslyAllowBrowser: true
-});
+  dangerouslyAllowBrowser: true,
+} as ClientOptions);
 
-interface ExtractedInfo {
-  type: 'travel' | 'event' | 'lyrics' | 'movie' | 'anime' | 'sports' | 'culture';
-  destination?: string;
+// ---------------------------------------------------------------------------
+//  Type definitions
+// ---------------------------------------------------------------------------
+
+export interface OutfitContext {
+  /** One of the primary inspiration buckets */
+  inspirationType:
+    | 'travel'
+    | 'event'
+    | 'lyrics'
+    | 'movie'
+    | 'anime'
+    | 'sports'
+    | 'culture'
+    | 'weather';
+  /** “Paris, France” | “Tokyo” etc. */
+  location?: string;
+  /** ISO‑8601 date if mentioned or implied */
   date?: string;
+  /** Specific event, e.g. “wedding” */
   event?: string;
-  lyrics?: string;
-  movie?: string;
-  anime?: string;
-  sports?: string;
-  culture?: string;
+  /** Holiday or celebration, e.g. “Halloween” */
+  celebration?: string;
+  /** Style modifiers: “rave”, “business casual”, … */
+  theme?: string;
+  /** Weather words from prompt: “rainy”, “sunny”, … */
+  weatherDescription?: string;
+  /** Numeric temp (°F) if stated */
+  temperature?: number;
+  /** Title of referenced work or sports team */
+  referencedWork?: string;
+  /** Original user query */
+  originalQuery: string;
 }
 
-export async function extractTravelInfo(message: string): Promise<ExtractedInfo> {
-  const systemPrompt = `You are a fashion AI assistant. Extract one of the following: travel information, event type, song lyrics, movie/anime inspiration, sports fan theme, or cultural occasion from the user's message and return it in JSON format.
+export interface OutfitDesign {
+  /** Catchy outfit name */
+  type: string;
+  /** Labeled item breakdown */
+  description: string;
+  /** Hero item query for shopping */
+  searchQuery: string;
+  /** Prompt for image generation */
+  imagePrompt: string;
+}
 
-[...same as before...]
-}`;
+// ---------------------------------------------------------------------------
+//  1️⃣  Parse user prompt into structured context
+// ---------------------------------------------------------------------------
 
-  if (!message.trim()) {
-    throw new Error('Please provide a valid input');
-  }
+export async function parseOutfitPrompt(message: string): Promise<OutfitContext> {
+  if (!message.trim()) throw new Error('Please provide a valid input');
+
+  const schema = `Return JSON with the following keys (omit keys not present):\n\n- inspirationType: one of [\"travel\",\"event\",\"lyrics\",\"movie\",\"anime\",\"sports\",\"culture\",\"weather\"]\n- location: city / state / country\n- date: ISO‑8601 (yyyy-mm-dd)\n- event: if inspirationType=event\n- celebration: holiday / celebration (e.g. Halloween)\n- theme: style or vibe keywords (e.g. rave, formal)\n- weatherDescription: user‑mentioned weather words (rainy, sunny …)\n- temperature: number in °F\n- referencedWork: title of song / movie / anime or sports team\n- originalQuery: copy of the user message\n\nOnly output JSON.`;
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: MODEL,
+      response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
-      ]
+        { role: 'system', content: schema },
+        { role: 'user', content: message },
+      ],
     });
 
-    const content = completion.choices[0].message.content;
-    if (!content) {
-      throw new Error('Please provide more details');
-    }
+    const raw = completion.choices[0].message?.content;
+    if (!raw) throw new Error('Empty response from OpenAI');
 
-    let result: ExtractedInfo;
-    try {
-      result = JSON.parse(content);
-    } catch (parseError) {
-      console.error('Failed to parse OpenAI response:', content);
-      throw new Error('Could not understand your request. Please try being more specific');
-    }
-
-    return result;
-  } catch (error: any) {
-    console.error('Error in extractTravelInfo:', error);
-    throw new Error(error.message || 'Failed to process your request');
+    const parsed: OutfitContext = JSON.parse(raw);
+    parsed.originalQuery = message;
+    return parsed;
+  } catch (err: any) {
+    console.error('parseOutfitPrompt error:', err);
+    throw new Error(err.message || 'Unable to understand your request');
   }
 }
 
-export async function generateOutfitSuggestions(params: { weather?: any; event?: string; lyrics?: string; movie?: string; anime?: string; sports?: string; culture?: string }): Promise<any[]> {
-  const { weather, event, lyrics, movie, anime, sports, culture } = params;
+// ---------------------------------------------------------------------------
+//  2️⃣  Generate outfit designs from structured context
+// ---------------------------------------------------------------------------
+
+interface WeatherInfo {
+  location: string;
+  date: string; // ISO
+  temperature: number;
+  description: string;
+}
+
+interface GenerateOptions {
+  context: OutfitContext;
+  weather?: WeatherInfo;
+  count?: number; // default 4
+}
+
+export async function generateOutfitSuggestions({ context, weather, count = 4 }: GenerateOptions): Promise<OutfitDesign[]> {
   let contextInput = '';
 
-  if (weather) {
-    const temp = Math.round(weather.temperature);
-    const season = getSeason(new Date(weather.date));
-    contextInput = `Design 4 fashion-forward outfits for ${weather.location}. Temperature: ${temp}°F (${getTemperatureCategory(temp)}), Condition: ${weather.description}, Season: ${season}.`;
-  } else if (event) {
-    contextInput = `Design 4 trend-aware outfits suitable for attending a ${event}.`;
-  } else if (lyrics) {
-    contextInput = `Design 4 outfits inspired by the emotion, tone, and imagery of the lyrics: \"${lyrics}\".`;
-  } else if (movie) {
-    contextInput = `Design 4 fashion looks inspired by the visual mood and style of the movie: \"${movie}\".`;
-  } else if (anime) {
-    contextInput = `Design 4 stylish outfits that channel the characters or aesthetic from the anime: \"${anime}\".`;
-  } else if (sports) {
-    contextInput = `Design 4 modern fan-inspired outfits for the occasion: \"${sports}\".`;
-  } else if (culture) {
-    contextInput = `Design 4 fashion outfits based on the cultural vibe of: \"${culture}\".`;
+  if (weather && isValid(parseISO(weather.date))) {
+    const season = getSeason(parseISO(weather.date));
+    contextInput = `Design ${count} fashion‑forward outfits for ${weather.location} on ${format(parseISO(weather.date), 'MMMM do, yyyy')}. Temperature: ${weather.temperature}°F (${getTemperatureCategory(weather.temperature)}), Weather: ${weather.description}, Season: ${season}.`;
   } else {
-    contextInput = `Design 4 versatile and stylish outfits based on recent fashion trends.`;
+    switch (context.inspirationType) {
+      case 'event':
+        contextInput = `Design ${count} trend‑aware outfits suitable for ${context.event ?? 'an event'}${context.theme ? ` with a ${context.theme} theme` : ''}.`;
+        break;
+      case 'travel':
+        contextInput = `Design ${count} stylish outfits for traveling to ${context.location ?? 'a destination'}${context.theme ? `, vibe: ${context.theme}` : ''}.`;
+        break;
+      case 'lyrics':
+      case 'movie':
+      case 'anime':
+      case 'sports':
+        contextInput = `Design ${count} outfits inspired by ${context.referencedWork ?? 'the referenced work'}.`;
+        break;
+      case 'culture':
+        contextInput = `Design ${count} outfits reflecting the spirit of ${context.celebration ?? 'the cultural occasion'}.`;
+        break;
+      case 'weather':
+        contextInput = `Design ${count} weather‑appropriate outfits for a ${context.weatherDescription ?? ''} day around ${context.temperature ? context.temperature + '°F' : 'unknown temperature'}.`;
+        break;
+      default:
+        contextInput = `Design ${count} versatile and stylish outfits based on current fashion trends.`;
+    }
   }
 
-  const prompt = `${contextInput}
-
-Each outfit should include:
-- A creative and fashionable name
-- Clear description with labeled clothing items (Top, Bottom, Outerwear if needed, Shoes, Accessories)
-- Include fabric, fit, and color details
-- Add a searchQuery string and imagePrompt string
-
-Format output as a valid JSON array of 4 objects. Each object must have:
-{
-  \"type\": \"Outfit Name\",
-  \"description\": \"Top: ..., Bottom: ..., Shoes: ..., Accessories: ...\",
-  \"searchQuery\": \"main item name\",
-  \"imagePrompt\": \"descriptive image idea\"
-}`;
+  const designPrompt = `${contextInput}\n\nFor each outfit include:\n- \"type\": catchy outfit name (max 5 words)\n- \"description\": labeled clothing items (Top, Bottom, Outerwear, Shoes, Accessories) with fabric/color/fit details\n- \"searchQuery\": concise hero item search term (avoid specific brands unless essential)\n- \"imagePrompt\": imaginative prompt for generating an editorial‑style image\n\nRespond ONLY with a valid JSON array containing exactly ${count} objects.`;
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: MODEL,
+      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
-          content: 'You are a fashion-forward AI stylist trained on modern, edgy, and seasonal fashion trends. Respond with only a valid JSON array of 4 outfit objects.'
+          content: 'You are a seasoned fashion stylist with deep knowledge of contemporary, streetwear, luxury and heritage trends.'
         },
         {
           role: 'user',
-          content: prompt
-        }
-      ]
+          content: designPrompt,
+        },
+      ],
     });
 
-    const content = completion.choices[0].message.content;
-    if (!content) return [];
+    const raw = completion.choices[0].message?.content;
+    if (!raw) return [];
 
-    try {
-      const jsonStart = content.indexOf('[');
-      const jsonEnd = content.lastIndexOf(']') + 1;
-      if (jsonStart < 0 || jsonEnd < 0) throw new Error('No JSON array found');
-      const cleanedContent = content.substring(jsonStart, jsonEnd).replace(/,(\s*[}\]])/g, '$1');
-      const outfits = JSON.parse(cleanedContent);
-      return Array.isArray(outfits) ? outfits : [];
-    } catch (error) {
-      console.error('Parsing error:', error);
-      return [];
-    }
-  } catch (error: any) {
-    console.error('Error generating outfit suggestions:', error);
+    const outfits: OutfitDesign[] = JSON.parse(raw);
+    return Array.isArray(outfits) ? outfits : [];
+  } catch (error) {
+    console.error('generateOutfitSuggestions error:', error);
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+//  Helpers
+// ---------------------------------------------------------------------------
 
 function getSeason(date: Date): string {
   const month = date.getMonth() + 1;
@@ -141,11 +179,12 @@ function getSeason(date: Date): string {
 }
 
 function getTemperatureCategory(temp: number): string {
+  if (temp >= 95) return 'Extreme Heat';
   if (temp >= 85) return 'Very Hot';
   if (temp >= 75) return 'Hot';
   if (temp >= 65) return 'Warm';
   if (temp >= 55) return 'Mild';
   if (temp >= 45) return 'Cool';
   if (temp >= 35) return 'Cold';
-  return 'Very Cold';
+  return 'Freezing';
 }
